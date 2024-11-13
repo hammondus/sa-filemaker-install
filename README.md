@@ -4,15 +4,18 @@
 ## Prerequisites before running this script.
 - Preferrably a fresh installation of Ubuntu 22.04.
 - Any additional drives that Filemaker will use for databases, containers, backups etc are connected to the VM.
-- Drives need not be partitioned for formatted. The script will do that.
+- Drives need not be partitioned or formatted. The script will do that.
 - Ports 22, 80, 443 & 5003 opened up to the VM
 - The public IP address of the VM has been assigned to a DNS host record
 
 From the users home directory on the VM
-`git clone https://github.com/hammondus/sa-filemaker-install`
-`cd sa-filemaker-install`
+```bash
+git clone https://github.com/hammondus/sa-filemaker-install
+cd sa-filemaker-install
+```
 
 Edit `fm_install.sh`
+
 The following variables at the top of the script need to be set.
 
 `DOWNLOAD=https://dowloads.claris.com....`   needs to be to the location where you can download the filemaker installation .zip file
