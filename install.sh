@@ -11,11 +11,11 @@
 
 # Required
 # ALL The following variables are required to be uncommented and set correctly for the script to work
-DOWNLOAD=https://downloads.claris.com/esd/fms_21.1.1.40_Ubuntu22_amd64.zip
-CERTBOT_HOSTNAME_SETUP=fm21.southernairlines.com.au
+DOWNLOAD=https://downloads.claris.com/filemaker.zip
+CERTBOT_HOSTNAME_SETUP=fm.domain.com
 #CERTBOT_HOSTNAME_PROD=fm.hammond.zone
-CERTBOT_EMAIL=craig@blueskyflying.com.au
-HOSTNAME=fm21.southernairlines.com.au
+CERTBOT_EMAIL=me@you.com
+HOSTNAME=fm.domain.com
 TIMEZONE=Australia/Melbourne
 FM_ADMIN_USER=admin
 FM_ADMIN_PASSWORD=pass
