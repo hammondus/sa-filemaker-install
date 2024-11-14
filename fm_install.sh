@@ -1,4 +1,7 @@
 #!/bin/bash
+set -u  # treat unset variables as an error
+set -o pipefail  #returns any error in the pipe, not just last command
+
 # I like to setup up with a temp hostname first. This lets me get the new server up
 # and running with SSL where I can test filemaker first before moving production data to it.
 #
@@ -10,19 +13,35 @@
 # CERTBOT_HOSTNAME_PROD is used as this final host name.
 
 # Required
-# ALL The following variables are required to be uncommented and set correctly for the script to work
+# ALL The following variables are required
+# These variables won't work as is. They need to be set correctly
 DOWNLOAD=https://downloads.claris.com/filemaker.zip
-CERTBOT_HOSTNAME_SETUP=fm.domain.com
-#CERTBOT_HOSTNAME_PROD=fm.hammond.zone
+HOSTNAME=fm.example.com
 CERTBOT_EMAIL=me@you.com
-HOSTNAME=fm.domain.com
+
+#
+# These variables will work, but should be set to appropraite values.
 TIMEZONE=Australia/Melbourne
 FM_ADMIN_USER=admin
 FM_ADMIN_PASSWORD=pass
 FM_ADMIN_PIN=1234
+
+#
+# These can be changed to suit, but will work fine as they are.
 HOME_LOCATION=/home/ubuntu
-STATE=$PWD/state
-ASSISTED_FILE=$HOME_LOCATION/fminstall/AssInst.txt
+SCRIPT_LOCATION=$HOME_LOCATION/sa-filemaker-install
+STATE=$SCRIPT_LOCATION/state
+ASSISTED_FILE=$SCRIPT_LOCATION/fminstall/AssInst.txt
+
+
+#
+# These shouldn't be changed for this script to work
+WEBROOTPATH="/opt/FileMaker/FileMaker Server/NginxServer/htdocs/httpsRoot/"
+
+# Overrides with private data
+DOWNLOAD=xxx
+HOSTNAME=xxx
+CERTBOT_EMAIL=xxx
 
 #Be careful with the drive settings. The script doesn't check that what you have put in is correct.
 #Only put in devices that are completely blank. Devices listed below will be partitioned and formatted.
@@ -38,12 +57,13 @@ GLANCES=Yes
 NCDU=Yes
 IOTOP=Yes
 
+
 #echo "If this install asks you to reboot and rerun the script, it is copied to ~/fm_install.sh"
 #read -p "Press return to continue "
 
 # Copy this script to the home directory so it can easily be run it after login
 if [ ! -f ~/fm_install.sh ]; then
-  ln -s $PWD/fm_install.sh $HOME_LOCATION/fm_install.sh
+  ln -s $SCRIPT_LOCATION/fm_install.sh $HOME_LOCATION/fm_install.sh
 fi
 
 
@@ -67,6 +87,17 @@ if [ -f /etc/os-release ]; then
   fi
 fi
 
+if [ ! -f $STATE/timezone-set ]; then 
+  sudo timedatectl set-timezone $TIMEZONE || { echo "Error setting timezone"; exit 1; }
+  timedatectl
+  touch $STATE/timezone-set
+fi
+
+if [ ! -f $STATE/hostname-set ]; then
+  sudo hostnamectl set-hostname $HOSTNAME || { echo "Error setting hostname"; exit 1; }
+  touch $STATE/hostname-set
+fi
+
 #Make sure the system is up to date and reboot if necessary
 if [ ! -f $STATE/apt-upgrade ]; then
   echo 'apt update/upgrade not done. doing it now'
@@ -78,16 +109,7 @@ if [ ! -f $STATE/apt-upgrade ]; then
   fi
 fi
 
-if [ ! -f $STATE/timezone-set ]; then 
-  sudo timedatectl set-timezone $TIMEZONE || { echo "Error setting timezone"; exit 1; }
-  timedatectl
-  touch $STATE/timezone-set
-fi
 
-if [ ! -f $STATE/hostname-set ]; then
-  sudo hostnamectl set-hostname $HOSTNAME || { echo "Error setting hostname"; exit 1; }
-  touch $STATE/hostname-set
-fi
 
 #Install unzip if it's not installed. Not optional
 #The download from claris needs to be unzipped.
@@ -109,55 +131,68 @@ fi
 #
 
 if [ ! -f $STATE/drive-setup ]; then
-  echo "Format the database drive"
-  sudo parted -s $DRIVE_DATABASES mklabel gpt
-  sudo parted -s $DRIVE_DATABASES mkpart Databases 0% 100%
-  sudo mkfs.ext4 -m 0 ${DRIVE_DATABASES}p1
+  echo "Label the drives"
+  sudo parted -s $DRIVE_DATABASES mklabel gpt || { echo "error with mklabel on database drive"; exit 1; }
+  sudo parted -s $DRIVE_CONTAINERS mklabel gpt || { echo "error with mklabel on containers drive"; exit 1; }
+  sudo parted -s $DRIVE_BACKUPS mklabel gpt || { echo "error with mklabel on backup drive"; exit 1; }
 
-  echo "Format the database drive"
-  sudo parted -s $DRIVE_CONTAINERS mklabel gpt
-  sudo parted -s $DRIVE_CONTAINERS mkpart Containers 0% 100%
-  sudo mkfs.ext4 -m 0 ${DRIVE_CONTAINERS}p1
+  echo "Partition the drives"
+  sudo parted -s $DRIVE_DATABASES mkpart Databases 0% 100% || { echo "error with mkpark on database drive"; exit 1; }
+  sudo parted -s $DRIVE_CONTAINERS mkpart Containers 0% 100% || { echo "error with mkpart on containers drive"; exit 1; }
+  sudo parted -s $DRIVE_BACKUPS mkpart Backups 0% 100% || { echo "error with mkpart on backup drive"; exit 1; }
 
-  echo "Format the database drive"
-  sudo parted -s $DRIVE_BACKUPS mklabel gpt
-  sudo parted -s $DRIVE_BACKUPS mkpart Backups 0% 100%
-  sudo mkfs.ext4 -m 0 ${DRIVE_BACKUPS}p1
+  echo "Format the drives"
+  sudo mkfs.ext4 -m 0 ${DRIVE_DATABASES}p1 || { echo "error with mkfs on database drive"; exit 1; }
+  sudo mkfs.ext4 -m 0 ${DRIVE_CONTAINERS}p1 || { echo "error with mkfs on containers drive"; exit 1; }
+  sudo mkfs.ext4 -m 0 ${DRIVE_BACKUPS}p1 || { echo "error with mkfs on backup drive"; exit 1; }
 
   touch $STATE/drive-setup
 fi
 
+DATABASE_UUID=$(lsblk -n -o UUID ${DRIVE_DATABASES}p1)
+CONTAINER_UUID=$(lsblk -n -o UUID ${DRIVE_CONTAINERS}p1)
+BACKUP_UUID=$(lsblk -n -o UUID ${DRIVE_BACKUPS}p1)
 
-DATABASE_UUID=$(blkid -o value -s UUID ${DRIVE_DATABASES}p1)
-CONTAINER_UUID=$(blkid -o value -s UUID ${DRIVE_CONTAINERS}p1)
-BACKUP_UUID=$(blkid -o value -s UUID ${DRIVE_BACKUPS}p1)
+#Check we have UUID's for all drives
+if [ -z $DATABASE_UUID ] || [ -z $CONTAINER_UUID ] || [ -z $BACKUP_UUID ]; then
+  echo "Don't have all required UUID's"
+  echo DATABASE_UUID: $DATABASE_UUID
+  echo CONTAINER_UUID: $CONTAINER_UUID
+  echo BACKUP_UUID: $BACKUP_UUID
+  exit 1
+fi
 
 
 #Download filemaker
 if [ ! -f $STATE/filemaker-downloaded ]; then
-  rm -rf $PWD/fmdownload
-  if mkdir $PWD/fmdownload; then
-    cd $PWD/fmdownload
+  rm -rf $SCRIPT_LOCATION/fmdownload
+  if mkdir $SCRIPT_LOCATION/fmdownload; then
+    cd $SCRIPT_LOCATION/fmdownload
     if wget $DOWNLOAD; then
       unzip ./fms*
     else
       echo "Error downloading filemaker."
-      exit 9
+      exit 1
     fi
     touch $STATE/filemaker-downloaded
   else
-    echo "Error creating Filemaker install directory at $HOME_LOCATION/fminstall"
-    exit 9
+    echo "Error creating Filemaker download directory at $SCRIPT_LOCATION/fmdownload"
+    exit 1
   fi
 fi
 
-exit 99
-
+#Copy install file
+# The only thing we want from the claris .zip file is the *.deb installer.
+if [ ! -f $STATE/filemaker-install-file ]; then
+  mkdir $SCRIPT_LOCATION/fminstall
+  cp $SCRIPT_LOCATION/fmdownload/filemaker-server*.deb $SCRIPT_LOCATION/fminstall || { echo "Error copying .deb file to fminstall directory"; exit 1; }
+  touch $STATE/filemaker-install-file
+fi
 
 
 #Install filemaker
 if [ ! -f $STATE/filemaker-installed ]; then
-  cd $HOME_LOCATION/fminstall
+  cd $SCRIPT_LOCATION/fminstall
   # Create the assisted install file.
   echo "[Assisted Install]" > $ASSISTED_FILE
   echo "License Accepted=1" >> $ASSISTED_FILE
@@ -171,23 +206,50 @@ if [ ! -f $STATE/filemaker-installed ]; then
   echo "Swap File Size=4G" >> $ASSISTED_FILE
   echo "Swappiness=10" >> $ASSISTED_FILE
 
-  sudo FM_ASSISTED_INSTALL=$ASSISTED_FILE apt install ./filemaker-server*.deb -y || { echo "Error installing Filemaker"; exit 9; }
+  sudo FM_ASSISTED_INSTALL=$ASSISTED_FILE apt install ./filemaker-server*.deb -y || { echo "Error installing Filemaker"; exit 1; }
   touch $STATE/filemaker-installed
 fi
 
 if [ ! -f $STATE/certbot-installed ]; then
-  sudo snap install --classic certbot || { echo "Error installing Certbot"; exit 9; }
+  sudo snap install --classic certbot || { echo "Error installing Certbot."; exit 1; }
   sudo ln -s /snap/bin/certbot /usr/bin/certbot
   touch $STATE/certbot-installed
 fi
 
+sudo service ufw stop
 
-# For this to work:
-# You need a DNS host record for $CERTBOT_HOSTNAME_SETUP pointing to the public IP address of this server
-# You need port 80 & 443 open
+if [ ! -f $STATE/certbot-certificate ]; then
+  sudo certbot certonly --webroot \
+    -w "$WEBROOTPATH" \
+    -d $HOSTNAME \
+    --agree-tos --non-interactive \
+    -m $CERTBOT_EMAIL \
+    || { echo "Error getting Certificate with Certbot."; sudo service ufw start; exit 1; }
+fi
+sudo service ufw start
+touch $STATE/certbot-certificate
 
-# if [ ! -f $STATE/certbot-cert ]; then
-#   sudo certbot certonly --webroot -w "/opt/FileMaker/FileMaker Server/NginxServer/htdocs/httpsRoot" -d $CERTBOT_HOSTNAME_SETUP \
-#     --agree-tos -m $CERTBOT_EMAIL || { echo "Error getting certbot certificate. Make sure DNS and firewall is set correctly"; exit 9; }
-#   touch $STATE/certbot-cert
-# fi
+exit 9
+
+if [ ! -f $STATE/certbot-certificate-loaded-filemaker ]; then
+  sudo chown -R fmserver:fmsadmin "$CERTBOTPATH"
+
+  CERTFILE=$(sudo realpath "$CERTBOTPATH/live/$HOSTNAME/cert.pem")
+  PRIVKEYFILE=$(sudo realpath "$CERTBOTPATH/live/$HOSTNAME/privkey.pem")
+  INTERMEDIATEFILE=$(sudo realpath "$CERTBOTPATH/live/$HOSTNAME/fullchain.pem")
+
+  echo "Importing Certificates:"
+  echo "Certificate: $CERTFILE"
+  echo "Certificate: $PRIVKEYFILE"
+  echo "Private key: $INTERMEDIATEFILE"
+
+  sudo fmsadmin certificate \
+   import "$CERTFILE" \
+   --keyfile "$PRIVKEYFILE" \
+   --intermediateCA "$INTERMEDIATEFILE" \
+   -u $FM_ADMIN_USER -p $FM_ADMIN_PASSWORD -y || { echo "Filemaker unable to import certificate"; exit 1; }
+
+  sudo service fmshelper restart
+fi
+
+## At this point, the server should be up and running with an SSL cert.
